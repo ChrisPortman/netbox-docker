@@ -1,6 +1,12 @@
-# - is_private: true
-#   name: RFC1918
-#   slug: rfc1918
+# IPv4 Private spaces
+- is_private: true
+  name: RFC1918
+  slug: rfc1918
+- is_private: true
+  name: RFC6598
+  slug: rfc6598
+
+# IPv6 Private spaces
 # - is_private: true
 #   name: RFC4193 ULA
 #   slug: rfc4193-ula

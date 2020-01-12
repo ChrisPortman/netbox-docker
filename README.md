@@ -1,3 +1,129 @@
+# Deployment Branch
+
+This section documents the additional functionality of the deployment branch.  The original README is below.
+
+## Overview
+
+This branch adds funtionallity and configuration to a Netbox Docker deployment to support the automated install of
+operating systems on Devices and Virtual Machines.  To do so, it provides:
+
+* An additional view at `/dcim/build` which uses the request's source IP or the `ipaddr` query parameter to identify
+the device from which the request originates.  Based on the device's configuration, an automated install (e.g. kickstart)
+script is generated and provided as a response to the request.  This additional view is added to the Netbox application
+via a gunicorn `post_worker_init` hook.
+* Custom fields to support PyDHCP added via the initializers:
+   * `redeploy` applies to device and virtual machine objects.  It is a boolean, that when made true, indicates the intent
+to deploy/redeploy the device. This field is consulted by PyDHCP when determining whether or not to respond to a PXE boot request.
+It is also required to be true for the `/dcim/build` view to produce an install script.
+   * `confirm_redeploy` applies to device and virtual machine objects.  Performing a redeploy, particularly against a live device,
+is obviously a very destructive action.  To protect against accidental redeployments, this field must be set to the `name` of the
+device/virtual machine that is intended to tbe redeployed. This field is consulted by PyDHCP when determining whether or not to
+respond to a PXE boot request.
+   * `deploy_status` applies to device and virtual machine objects.  This field is available to be updated from the install process
+to provide indicators of the deployment state of the device.
+   * `pydhcp_mac` applies to IP Address objects.  This field is used by PyDHCP to track the MAC address to which a dynamic lease is
+allocated.
+   * `pydhcp_expire` applies to IP Address objects. This field is used by PyDHCP to track the expiry of a dynamic lease.
+* A `deployment_user` user account with permissions only to change devices and virtual machines.  This user is created with no password and therefore
+a random unknown password is generated.  This a token valid for 30 mins is created each time the `/dcim/build` view is called and generates
+an install script.  The token is passed to the template and can be used to call back to netbox to update the build status during the build.
+
+## Maintenance
+
+Maintenance of this branch involves rebasing it against the upstream's **RELEASE** branch and running `docker-compose pull` to
+refresh the netbox docker images.
+
+## PyDHCP Integration
+
+As above, this branch automatically provides the custom fields required to facilitate PyDHCP functionallity.  Strictly speaking,
+you do not need to use PyDHCP to use the `/dcim/build` interface.
+
+See more on PyDHCP here: https://github.com/ChrisPortman/pydchp
+
+## Other Implications
+
+* The `LOGIN_REQUIRED` option is required to be False.  The `/dcim/build` view needs to be accessable anonymously.  Leaving this
+as false, does not appear to expose any actual data.  The home page will be viewable anonymously however the item counts will all
+show the "lock" icon and no links to any other pages are available.  Browsing to URLs direct to objects will not work anonymously
+either.  This indicates that the permission based access is still enforced.  Setting `LOGIN_REQURED` to true, appears to only have
+the effect of redirecting any unauthenticated request to the login page.  It is this redirection that will break the `/dcim/build`
+view.
+* Once a device/virtual machine has its `redeploy` custom field set to true, the `/dcim/build` view will become available for it.
+The build view supports specifying the IP address of the device using a query string `ipaddr=<IP ADDRESS>` to override the source
+IP in the request.  This is helpful for debugging.  It also means however that the build script is available unauthenticated for
+the duration of `redeploy` remaining true.  This has the potential for data leakage/reconnaissance.  For this reason, you should
+ensure that `redeploy` is only True for as long as it is required to be.  Ideally the install scripts will have a callback that
+sets it to false.  This is also required to avoid reinstall loops.
+
+## Build Templates
+
+The directory `build_templates` is where the templates rendered by the `/dcim/build` view are stored.  The template syntax is
+Django's templating syntax.
+
+When the `/dcim/build` receives a request, it identifes the relevant device or virtual machine based on the source IP address of the
+request.  It then refers to the device's `platform` and loads the template from the `build_templates` directory with the file name
+that matches the platform name's `slug` representation.
+
+The template is redered with the following context:
+
+```
+{
+    device=device,                 # Netbox Device model instance
+    networks=[ networks_dicts ],   # List of dictionaries representing the devices network connections
+    request=request,               # The request object
+    token=token,                   # Token for the deployment_user that is valid for 30 mins
+}
+```
+
+The network dicts represent a network configuration and are in the following format.  There will be one for each
+IP address configured.  Interfaces named "ILO" will be ignored.
+
+An example network dict:
+```
+dict(
+    interface="bond0",
+    ipaddress="10.1.1.100",
+    netmask="255.255.0.0",
+    member_interfaces=["eth0", "eth1"],
+    gateway="10.1.1.1",
+    primary=True,
+    vlan="100",
+)
+```
+
+There are example CentOS 7 kickstart templates included.  These templates depend on some config contexts that provide additional information:
+
+**Deployment Repositories**
+
+```json
+{
+    "deployment_repositories": {
+        "base": "http://mirror.centos.org/centos/7/os/x86_64/",
+        "epel": "http://mirror.internode.on.net/pub/epel/7/x86_64/",
+        "updates": "http://mirror.internode.on.net/pub/centos/7/updates/x86_64/"
+    }
+}
+```
+
+
+## The PXE Process
+
+Typically, your devices will PXE boot.  The file that it retrieves will need to appropriately link the process to the `/dcim/build` view.
+This is an example `pxelinux.cfg/default` file located on a TFTP server that supports the automated build of a Centos 7 machine.
+
+Note the `ks` kernel option:
+```
+default menu.c32
+prompt 0
+timeout 5
+
+MENU TITLE Centos 7 PXE Boot
+LABEL centos7_x64
+MENU LABEL CentOS 7_X64
+KERNEL vmlinuz
+APPEND initrd=initrd.img ks=http://netbox.example.com/dcim/build/
+```
+
 # netbox-docker
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/netbox-community/netbox-docker)][github-release]

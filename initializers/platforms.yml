@@ -1,8 +1,7 @@
-# - name: Platform 1
-#   slug: platform-1
-#   manufacturer: Manufacturer 1
-#   napalm_driver: driver1
-#   napalm_args: "{'arg1': 'value1', 'arg2': 'value2'}"
+- name: Centos7-Server
+  slug: centos7-server
+- name: Centos7-Workstation
+  slug: centos7-workstation
 # - name: Platform 2
 #   slug: platform-2
 #   manufacturer: Manufacturer 2

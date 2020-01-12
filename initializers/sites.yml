@@ -1,11 +1,3 @@
-# - name: AMS 1
-#   slug: ams1
-#   region: Downtown
-#   status: 1
-#   facility: Amsterdam 1
-#   asn: 12345
-#   custom_fields:
-#     text_field: Description
 # - name: AMS 2
 #   slug: ams2
 #   region: Downtown

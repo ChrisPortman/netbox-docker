@@ -1,2 +1,6 @@
-# - name: Hyper-V
-#   slug: hyper-v
+- name: Hyper-V
+  slug: hyper-v
+- name: KVM
+  slug: kvm
+- name: VMWare
+  slug: vmware

@@ -1,5 +1,5 @@
 ## To list all permissions, run:
-## 
+##
 ## docker-compose run --rm --entrypoint /bin/bash netbox
 ## $ ./manage.py migrate
 ## $ ./manage.py shell
@@ -10,14 +10,9 @@
 ##
 ## Examples:
 
-# technical_user:
-#   api_token: 0123456789technicaluser789abcdef01234567 # must be looooong!
-# reader:
-#   password: reader
-# writer:
-#   password: writer
-#   permissions:
-#   - delete_device
-#   - delete_virtualmachine
-#   - add_*
-#   - change_*
+deployment_user:
+  permissions:
+  - view_device
+  - change_device
+  - view_virtualmachine
+  - change_virtualmachine

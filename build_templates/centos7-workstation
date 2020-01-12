@@ -1,0 +1,155 @@
+#version=centos7-workstation
+
+# System authorization information
+auth --enableshadow --passalgo=sha512 --enablefingerprint
+
+# Install OS instead of upgrade
+install
+
+# Use network installation
+url --url={{device.get_config_context.deployment_repositories.base}}
+
+{% for name, url in device.get_config_context.deployment_repositories.items %}
+{% if name != "base" %}repo --name={{name}} --baseurl={{url}}{% endif %}
+{% endfor %}
+
+cmdline
+
+# Firewall configuration
+firewall --disabled
+firstboot --disable
+ignoredisk --only-use={{device.cf.install_disk|default:"sda"}}
+
+# Keyboard layouts
+keyboard --vckeymap=us --xlayouts=""
+
+# System language
+lang en_AU.UTF-8
+
+# Network information
+{% for ip in networks %}
+{% if ip.member_interfaces %}
+# Bonded interface
+network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --bondopts=mode=802.3ad,miimon=100,lacp_rate=1,xmit_hash_policy=layer2+3 --bondslaves={{ip.member_interfaces|join:","}} --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+{% for mem in ip.member_interfaces %}
+network --device={{mem}} --onboot=no
+{% endfor %}
+{% else %}
+network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+{% endif %}
+{% endfor %}
+
+# Reboot after installation
+reboot
+
+# Root password
+rootpw thincrust
+
+# Additional non root user
+user --name=admin --groups=wheel --password=thincrust
+
+# SELinux configuration
+selinux --disabled
+
+# System services
+services --enabled=chronyd,puppet
+
+## Configure X
+xconfig --startxonboot --defaultdesktop=GNOME
+
+# System timezone
+timezone --utc --ntpservers=10.192.23.4 Australia/Sydney
+
+# Show debug logs
+logging --level=debug
+
+# Disk Setup
+bootloader --iscrypted --password=grub.pbkdf2.sha512.10000.6F89948B40C2D38DD4753574FEC9D6EF6A8084530C64256051129CA687951DCCC5233D88E2DDF5BFD6FC47BDD5A1AE0DC9D7D0A3C447CB1A53C92A434265F79D.C9926DB5884DE5CD35480567501F0BEA794B9031BA2796464C4C219DF71A0DA87E997B7AF7DFD7AD22D59A309685D719BC1F9F258F527D769BE5C9B00BF03BD3 --location=mbr --boot-drive={{ device.cf.install_disk|default:"sda" }} --append="crashkernel=auto"
+
+zerombr
+clearpart --all --initlabel
+
+# Partitioning of system drive for non-UEFI hosts
+part /boot --size=1024 --asprimary --fstype=ext4 --ondisk={{device.cf.install_disk|default:"sda"}}
+part /boot/efi --size=200 --asprimary --fstype vfat --ondisk={{device.cf.install_disk|default:"sda"}}
+part swap --recommended --asprimary --fstype=swap --ondisk={{device.cf.install_disk|default:"sda"}}
+part / --size=1 --grow --asprimary --fstype=xfs --ondisk={{device.cf.install_disk|default:"sda"}}
+
+%packages
+@ Core                      #@core
+@ Base                      #@base
+@ X Window System           #@x11
+@ GNOME                     #@gnome-desktop - A GNOME desktop
+chrony
+dmidecode
+kexec-tools
+openssh-clients
+rsync
+git
+vim
+firefox
+#puppet-agent
+-iwl100-firmware
+-iwl1000-firmware
+-iwl105-firmware
+-iwl135-firmware
+-iwl2000-firmware
+-iwl2030-firmware
+-iwl3160-firmware
+-iwl3945-firmware
+-iwl4965-firmware
+-iwl5000-firmware
+-iwl5150-firmware
+-iwl6000-firmware
+-iwl6000g2a-firmware
+-iwl6000g2b-firmware
+-iwl6050-firmware
+-iwl7260-firmware
+-iwl7265-firmware
+%end
+
+%post --logfile /var/log/deployment.log
+
+# Remove device-mapper-multipath and clear dmsetup
+yum -y erase device-mapper-multipath*
+dmsetup remove_all
+
+rm -f /etc/yum.repos.d/*
+
+# Puppet installation
+echo Writing Puppet configuration
+
+cat <<EOT > /etc/puppetlabs/puppet/puppet.conf
+[main]
+server = {{puppet_host}}
+
+[agent]
+runinterval = 30m
+environment = {{ device.cf.puppet_environment|default:"production" }}
+EOT
+
+mkdir -p /opt/puppetlabs/facter/facts.d/
+cat <<EOT > /opt/puppetlabs/facter/facts.d/asset_id.txt
+asset_id={{ device.id }}
+EOT
+
+# Fix the slave device ONBOOT values
+sed -ri 's/ONBOOT="no"/ONBOOT="yes"/' /etc/sysconfig/network-scripts/ifcfg-*_slave_*
+
+{% if token %}
+# Setting status as completed
+echo Updating status
+/bin/curl -X PATCH --header 'Content-Type: application/json' --header 'Authorization: Token {{token}}' -d '{"custom_fields":{"deploy_status": "Build complete", "redeploy": false, "confirm_redeploy": null}}' {{request.META.HTTP_X_FORWARDED_PROTO}}://{{request.META.HTTP_X_FORWARDED_HOST}}/api{{device.get_absolute_url}}
+{% endif %}
+%end
+
+%addon com_redhat_kdump --enable --reserve-mb='auto'
+%end
+
+{% if token %}
+%pre
+# Setting status as started
+echo Updating status
+/bin/curl -X PATCH --header 'Content-Type: application/json' --header 'Authorization: Token {{token}}' -d '{"custom_fields":{"deploy_status": "Kickstart has begun"}}' {{request.META.HTTP_X_FORWARDED_PROTO}}://{{request.META.HTTP_X_FORWARDED_HOST}}/api{{device.get_absolute_url}}
+%end
+{% endif %}

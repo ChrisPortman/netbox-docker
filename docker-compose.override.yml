@@ -1,0 +1,33 @@
+version: '3.4'
+
+services:
+  netbox:
+    image: netbox:latest-ldap-ipa
+    volumes:
+    - ./build_templates:/opt/netbox/netbox/templates/build_templates:ro
+    - /tmp/keytabs:/tmp/keytabs
+    environment:
+      KRB5_CLIENT_KTNAME: /tmp/keytabs/netbox.keytab
+
+  netbox-worker:
+    image: netbox:latest-ldap-ipa
+
+  nginx:
+    ports:
+    - 80:8080
+
+  dhcp:
+    image: pydhcp:latest
+    command: -b netbox --netbox-url=http://localhost --netbox-token 0123456789abcdef0123456789abcdef01234567 --netbox-allow-unknown-devices
+    network_mode: host
+
+  tftp:
+    image: pghalliday/tftp:latest
+    volumes:
+    - tftpboot:/var/tftpboot
+    ports:
+    - 69:69/udp
+
+volumes:
+  tftpboot:
+    driver: local

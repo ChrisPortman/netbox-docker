@@ -2,3 +2,5 @@
 .netbox
 .initializers
 docker-compose.override.yml
+.vscode
+venv
