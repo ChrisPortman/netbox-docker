@@ -47,15 +47,13 @@ def add_build(worker):
 
             if ipa.host_find(o_fqdn=device.name).get("result", None):
                 try:
-                    ipa.host_del(a_fqdn=device.name, o_continue=True, o_updatedns=True)
+                    ipa.host_del(a_fqdn=device.name, o_updatedns=True)
                 except Exception as ex:
                     logger.error("failed to delete existing host entry: %s", str(ex))
 
             host_extra_attrs = {}
             if device.site:
                 host_extra_attrs["o_nshostlocation"] = device.site.name
-            if device.role:
-                host_extra_attrs["o_nshardwareplatform"] = device.role.name
 
             try:
                 host = ipa.host_add(
@@ -63,7 +61,6 @@ def add_build(worker):
                     o_nsosversion=device.platform.name,
                     o_ip_address=str(device.primary_ip4.address.ip),
                     o_force=True,
-                    o_no_reverse=True,
                     o_random=True,
                     **host_extra_attrs,
                 )["result"]
@@ -115,26 +112,39 @@ def add_build(worker):
                 ).prefetch_related('interface', 'interface__member_interfaces')
             )
 
+
             networks = []
-            for ip in ip_address_instances:
-                if ip.interface.name == 'ILO':
+            member_interfaces = []
+            for _i in device.interfaces.all():
+                if _i.mgmt_only:
                     continue
 
-                gateway = IPAddress.objects.filter(
-                    address__net_contained_or_equal=ip.address.cidr,
-                    address__net_mask_length=ip.address.prefixlen,
-                    tags__name__in=["Gateway"]
-                ).first()
+                network = dict(
+                    interface=_i.name.split(".")[0],
+                    member_interfaces=[member.name for member in _i.member_interfaces.all()],
+                    vlan=_i.name.split('.')[-1] if '.' in _i.name else None,
+                    ipaddress=None,
+                    netmask=None,
+                    gateway=None,
+                    primary=False,
+                )
 
-                networks.append(dict(
-                    interface=ip.interface.name.split('.')[0],
-                    ipaddress=ipaddress.IPv4Interface(ip.address).with_netmask.split('/')[0],
-                    netmask=ipaddress.IPv4Interface(ip.address).with_netmask.split('/')[1],
-                    member_interfaces=[member.name for member in ip.interface.member_interfaces.all()],
-                    gateway=str(gateway.address.ip) if gateway else None,
-                    primary=ip.address == device.primary_ip4.address,
-                    vlan=ip.interface.name.split('.')[-1] if '.' in ip.interface.name else None,
-                ))
+                for ip in _i.ip_addresses.all():
+                    gateway = IPAddress.objects.filter(
+                        address__net_contained_or_equal=ip.address.cidr,
+                        address__net_mask_length=ip.address.prefixlen,
+                        tags__name__in=["Gateway"]
+                    ).first()
+
+                    network["ipaddress"] = ipaddress.IPv4Interface(ip.address).with_netmask.split("/")[0]
+                    network["netmask"] = ipaddress.IPv4Interface(ip.address).with_netmask.split('/')[1]
+                    network["gateway"] = str(gateway.address.ip) if gateway else None
+                    network["primary"] = network["primary"] or ip.address == device.primary_ip4.address
+
+                member_interfaces.extend(network["member_interfaces"])
+                networks.append(network)
+
+            networks = [n for n in networks if n["interface"] not in member_interfaces]
             networks.sort(key=lambda ip: ip['primary'], reverse=True)
 
             user = User.objects.filter(username="deployment_user").first()
@@ -175,3 +185,4 @@ accesslog = '-'
 capture_output = False
 loglevel = 'debug'
 post_worker_init = add_build
+
