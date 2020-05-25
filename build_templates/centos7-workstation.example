@@ -1,4 +1,4 @@
-#version=centos7-server
+#version=centos7-workstation
 
 # System authorization information
 auth --enableshadow --passalgo=sha512 --enablefingerprint
@@ -30,12 +30,12 @@ lang en_AU.UTF-8
 {% for ip in networks %}
 {% if ip.member_interfaces %}
 # Bonded interface
-network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --bondopts=mode=802.3ad,miimon=100,lacp_rate=1,xmit_hash_policy=layer2+3 --bondslaves={{ip.member_interfaces|join:","}} --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+network --no-activate --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --bondopts=mode=802.3ad,miimon=100,lacp_rate=1,xmit_hash_policy=layer2+3 --bondslaves={{ip.member_interfaces|join:","}} {% if ip.ipaddress %}--bootproto=static --ip={{ip.ipaddress}} --netmask={{ip.netmask}}{% else %}--noipv4{% endif %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if ip.primary %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
 {% for mem in ip.member_interfaces %}
-network --device={{mem}} --onboot=no
+network --device={{mem}} --onboot=no --noipv4 --noipv6
 {% endfor %}
 {% else %}
-network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+network --no-activate  --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 {% if ip.ipaddress %}--bootproto=static --ip={{ip.ipaddress}} --netmask={{ip.netmask}}{% else %}--noipv4{% endif %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if ip.primary %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
 {% endif %}
 {% endfor %}
 
@@ -45,18 +45,20 @@ reboot
 # Root password
 rootpw thincrust
 
+# Additional non root user
+user --name=admin --groups=wheel --password=thincrust
+
 # SELinux configuration
 selinux --disabled
 
 # System services
 services --enabled=chronyd,puppet
 
-# Do not configure the X Window System
-skipx
+## Configure X
+xconfig --startxonboot --defaultdesktop=GNOME
 
 # System timezone
-timezone --utc {% if device.get_config_context.ntp_servers %}--ntpservers={{device.get_config_context.ntp_servers|join:","}} {% endif %}Australia/Sydney
-
+timezone --utc --ntpservers=10.192.23.4 Australia/Sydney
 
 # Show debug logs
 logging --level=debug
@@ -73,22 +75,20 @@ part /boot/efi --size=200 --asprimary --fstype vfat --ondisk={{device.cf.install
 part swap --recommended --asprimary --fstype=swap --ondisk={{device.cf.install_disk|default:"sda"}}
 part / --size=1 --grow --asprimary --fstype=xfs --ondisk={{device.cf.install_disk|default:"sda"}}
 
-%packages --nobase
-@core
+%packages
+@ Core                      #@core
+@ Base                      #@base
+@ X Window System           #@x11
+@ GNOME                     #@gnome-desktop - A GNOME desktop
 chrony
 dmidecode
 kexec-tools
+openssh-clients
+rsync
+git
+vim
+firefox
 #puppet-agent
--acl
--aic94xx-firmware
--alsa-firmware
--alsa-lib
--alsa-tools-firmware
--audit
--cups-libs
--dhclient
--firewalld
--ivtv-firmware
 -iwl100-firmware
 -iwl1000-firmware
 -iwl105-firmware
@@ -106,38 +106,15 @@ kexec-tools
 -iwl6050-firmware
 -iwl7260-firmware
 -iwl7265-firmware
--libX11
--libXau
--libXft
--libXrender
--libaio
--libcap-ng
--libdrm
--libpng
--OpenIPMI
--parted
--patch
--plymouth
--policycoreutils
--postfix
--selinux-policy-targeted
--trousers
 %end
 
 %post --logfile /var/log/deployment.log
-
-{% if token %}
-# Setting status as started
-echo Updating status
-/bin/curl -X PATCH --header 'Content-Type: application/json' --header 'Authorization: Token {{token}}' -d '{"custom_fields":{"deploy_status": "Post installation script running"}}' {{request.META.HTTP_X_FORWARDED_PROTO}}://{{request.META.HTTP_X_FORWARDED_HOST}}/api{{device.get_absolute_url}}
-{% endif %}
-
 
 # Remove device-mapper-multipath and clear dmsetup
 yum -y erase device-mapper-multipath*
 dmsetup remove_all
 
-# rm -f /etc/yum.repos.d/*
+rm -f /etc/yum.repos.d/*
 
 # Puppet installation
 echo Writing Puppet configuration

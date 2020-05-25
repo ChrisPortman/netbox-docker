@@ -1,4 +1,4 @@
-#version=centos7-server-ipa
+#version=centos7-server
 
 # System authorization information
 auth --enableshadow --passalgo=sha512 --enablefingerprint
@@ -30,12 +30,12 @@ lang en_AU.UTF-8
 {% for ip in networks %}
 {% if ip.member_interfaces %}
 # Bonded interface
-network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --bondopts=mode=802.3ad,miimon=100,lacp_rate=1,xmit_hash_policy=layer2+3 --bondslaves={{ip.member_interfaces|join:","}} --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+network --no-activate --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --bondopts=mode=802.3ad,miimon=100,lacp_rate=1,xmit_hash_policy=layer2+3 --bondslaves={{ip.member_interfaces|join:","}} {% if ip.ipaddress %}--bootproto=static --ip={{ip.ipaddress}} --netmask={{ip.netmask}}{% else %}--noipv4{% endif %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if ip.primary %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
 {% for mem in ip.member_interfaces %}
-network --device={{mem}} --onboot=no
+network --device={{mem}} --onboot=no --noipv4 --noipv6
 {% endfor %}
 {% else %}
-network --no-activate --bootproto=static --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 --ip={{ip.ipaddress}} --netmask={{ip.netmask}} {% if ip.primary %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
+network --no-activate  --device={{ip.interface}} {% if ip.vlan %}--vlanid={{ip.vlan}}{% endif %} --onboot=yes --noipv6 {% if ip.ipaddress %}--bootproto=static --ip={{ip.ipaddress}} --netmask={{ip.netmask}}{% else %}--noipv4{% endif %} {% if ip.gateway %}--gateway={{ip.gateway}}{% endif %} {% if ip.primary %} {% if device.get_config_context.dns_servers %}--nameserver={{device.get_config_context.dns_servers | join:","}}{% endif %} --hostname={{device.name}} {% endif %}
 {% endif %}
 {% endfor %}
 
@@ -78,11 +78,6 @@ part / --size=1 --grow --asprimary --fstype=xfs --ondisk={{device.cf.install_dis
 chrony
 dmidecode
 kexec-tools
-
-{% if otp %}
-ipa-client
-{% endif %}
-
 #puppet-agent
 -acl
 -aic94xx-firmware
@@ -163,27 +158,6 @@ EOT
 
 # Fix the slave device ONBOOT values
 sed -ri 's/ONBOOT="no"/ONBOOT="yes"/' /etc/sysconfig/network-scripts/ifcfg-*_slave_*
-
-{% if otp %}
-ipa-client-install \
-  --unattended \
-  --server={{device.get_config_context.ipa_servers.0}} \
-  --hostname={{device.name}} \
-  --domain={{domain}} \
-  --realm={{domain|upper}} \
-  --enable-dns-updates \
-  --password={{otp}} \
-  --no-ntp \
-  --mkhomedir
-
-env DBUS_SYSTEM_BUS_ADDRESS=unix:path=/dev/null ipa-getcert request \
-  -I {{device.name}} \
-  -K host/{{device.name}}@{{domain|upper}} \
-  -k /etc/pki/tls/private/{{device.name}}.key \
-  -f /etc/pki/tls/certs/{{device.name}}.pem \
-  -D {{device.name}}
-{% endif %}
-
 
 {% if token %}
 # Setting status as completed

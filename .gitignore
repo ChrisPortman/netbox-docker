@@ -3,4 +3,6 @@
 .initializers
 docker-compose.override.yml
 .vscode
+build_templates/*
+!build_templates/*.example
 venv
