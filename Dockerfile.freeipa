@@ -12,4 +12,5 @@ RUN apk add --no-cache \
 
 RUN pip install --no-warn-script-location \
       python-freeipa \
-      requests_kerberos
+      requests_kerberos \
+      requests_gssapi

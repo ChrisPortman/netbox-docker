@@ -25,7 +25,7 @@ deploy_status:
   on_objects:
   - dcim.models.Device
   - virtualization.models.VirtualMachine
-install_disk:
+install_disk_devices:
   type: text
   label: Install Disk
   description: The disk that the OS will be installed on (Hint - "vda" on VMs with VirtIO disks).
@@ -34,6 +34,14 @@ install_disk:
   weight: 120
   on_objects:
   - dcim.models.Device
+install_disk_vm:
+  type: text
+  label: Install Disk
+  description: The disk that the OS will be installed on (Hint - "vda" on VMs with VirtIO disks).
+  required: false
+  default: vda
+  weight: 120
+  on_objects:
   - virtualization.models.VirtualMachine
 pydhcp_mac:
   type: text

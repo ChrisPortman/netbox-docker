@@ -1,0 +1,3 @@
+[submodule "build_templates"]
+	path = build_templates
+	url = git@git.white.dev:dev-white/netbox-build-templates.git
