@@ -25,10 +25,10 @@ deploy_status:
   on_objects:
   - dcim.models.Device
   - virtualization.models.VirtualMachine
-install_disk_devices:
+install_disk_device:
   type: text
   label: Install Disk
-  description: The disk that the OS will be installed on (Hint - "vda" on VMs with VirtIO disks).
+  description: The disk that the OS will be installed on.
   required: false
   default: sda
   weight: 120
@@ -37,12 +37,19 @@ install_disk_devices:
 install_disk_vm:
   type: text
   label: Install Disk
-  description: The disk that the OS will be installed on (Hint - "vda" on VMs with VirtIO disks).
+  description: The disk that the OS will be installed on.
   required: false
   default: vda
   weight: 120
   on_objects:
   - virtualization.models.VirtualMachine
+pydhcp_hostname:
+  type: text
+  label: DHCP Hostname
+  required: false
+  weight: 100
+  on_objects:
+  - ipam.models.IPAddress
 pydhcp_mac:
   type: text
   label: DHCP MAC Address
@@ -57,3 +64,4 @@ pydhcp_expire:
   weight: 110
   on_objects:
   - ipam.models.IPAddress
+
