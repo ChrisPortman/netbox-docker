@@ -29,50 +29,119 @@ def add_build(worker):
         logger.info("IPA support is DISABLED: %s", str(ex))
 
 
+    def _create_ipa_host(device):
+        if not IPA_ENABLED:
+            return None
+
+        ipa_servers = device.get_config_context().get('ipa_servers', [])
+        if not ipa_servers:
+            return None
+
+        ipa = IPAClient(choice(ipa_servers), verify_ssl=False)
+        try:
+            ipa.login_kerberos()
+        except ipa_exceptions.Unauthorized as ex:
+            logger.error("Unable to login to IPA: %s", str(ex))
+            raise Http404()
+
+        if ipa.host_find(o_fqdn=device.name).get("result", None):
+            try:
+                ipa.host_del(a_fqdn=device.name, o_updatedns=True)
+            except Exception as ex:
+                logger.error("failed to delete existing host entry: %s", str(ex))
+
+        host_extra_attrs = {}
+        if device.site:
+            host_extra_attrs["o_nshostlocation"] = device.site.name
+
+        try:
+            host = ipa.host_add(
+                a_fqdn=device.name,
+                o_nsosversion=device.platform.name,
+                o_ip_address=str(device.primary_ip4.address.ip),
+                o_force=True,
+                o_random=True,
+                **host_extra_attrs,
+            )["result"]
+            logger.info('Created IPA host %s', device.name)
+            return host['randompassword']
+
+        except (ipa_exceptions.UnknownOption, ipa_exceptions.ValidationError) as ex:
+            logger.error("IPA reported invalid API usage: %s", str(ex))
+        except ipa_exceptions.DuplicateEntry as ex:
+            logger.error("IPA reported that the host already exists - should not happen: %s", str(ex))
+
+        raise Http404()
+
+
+    def _create_network(interface, ip=None, vlan=None):
+        members = [member.name for member in interface.member_interfaces.all()]
+        if vlan:
+            members = []
+
+        network = dict(
+            interface=interface.name,
+            member_interfaces=members,
+            vlan=vlan,
+            ipaddress=None,
+            netmask=None,
+            gateway=None,
+            primary=False,
+        )
+
+        if ip:
+            gateway = IPAddress.objects.filter(
+                address__net_contained_or_equal=ip.address.cidr,
+                address__net_mask_length=ip.address.prefixlen,
+                tags__name__in=["Gateway"]
+            ).first()
+            network["ipaddress"] = ipaddress.IPv4Interface(ip.address).with_netmask.split("/")[0]
+            network["netmask"] = ipaddress.IPv4Interface(ip.address).with_netmask.split('/')[1]
+            network["gateway"] = str(gateway.address.ip) if gateway else None
+            network["primary"] = ip.address == interface.parent.primary_ip4.address
+
+        return network
+
+
+    def _networks_for_interface(interface):
+        """Extrapolate OS network connections from interface."""
+        untagged_vlan = interface.untagged_vlan.vid if interface.untagged_vlan else None
+        untagged_vlan_ip = None
+        tagged_vlan_ip = {i.vid: None for i in interface.tagged_vlans.all()}
+
+        ipaddresses = list(interface.ip_addresses.all())
+        if not(untagged_vlan or tagged_vlan_ip):
+            # If there are no configured vlans
+            # assume that the interface is not tagged and that any IP
+            # is for the bare interface.
+            ip = ipaddresses[0] if ipaddresses else None
+            return [_create_network(interface, ip)]
+
+        for ip in ipaddresses:
+            # Sort ipaddresses into their vlans.
+            prefix = Prefix.objects.filter(
+                vrf=ip.vrf,
+                prefix__net_contains=ip.address.ip,
+                prefix__net_mask_length=ip.address.prefixlen,
+            ).first()
+            if not prefix:
+                logger.warning("No prefix identified for IP: %s", ip.address.cidr)
+                continue
+
+            if prefix.vlan and prefix.vlan.vid in tagged_vlan_ip:
+                tagged_vlan_ip[prefix.vlan.vid] = ip
+            elif untagged_vlan and prefix.vlan and prefix.vlan.vid == untagged_vlan:
+                untagged_vlan_ip = ip
+
+        networks = [_create_network(interface, untagged_vlan_ip)]
+        for vlan, ip in tagged_vlan_ip.items():
+            networks.append(_create_network(interface, ip, vlan))
+
+        return networks
+
+
     class BuildView(View):
         ''' Presents a build file e.g. a kickstart file '''
-
-        @staticmethod
-        def _create_ipa_host(device):
-            ipa_servers = device.get_config_context().get('ipa_servers', [])
-            if not ipa_servers:
-                return None
-
-            ipa = IPAClient(choice(ipa_servers), verify_ssl=False)
-            try:
-                ipa.login_kerberos()
-            except ipa_exceptions.Unauthorized as ex:
-                logger.error("Unable to login to IPA: %s", str(ex))
-                raise Http404()
-
-            if ipa.host_find(o_fqdn=device.name).get("result", None):
-                try:
-                    ipa.host_del(a_fqdn=device.name, o_updatedns=True)
-                except Exception as ex:
-                    logger.error("failed to delete existing host entry: %s", str(ex))
-
-            host_extra_attrs = {}
-            if device.site:
-                host_extra_attrs["o_nshostlocation"] = device.site.name
-
-            try:
-                host = ipa.host_add(
-                    a_fqdn=device.name,
-                    o_nsosversion=device.platform.name,
-                    o_ip_address=str(device.primary_ip4.address.ip),
-                    o_force=True,
-                    o_random=True,
-                    **host_extra_attrs,
-                )["result"]
-                logger.info('Created IPA host %s', device.name)
-                return host['randompassword']
-
-            except (ipa_exceptions.UnknownOption, ipa_exceptions.ValidationError) as ex:
-                logger.error("IPA reported invalid API usage: %s", str(ex))
-            except ipa_exceptions.DuplicateEntry as ex:
-                logger.error("IPA reported that the host already exists - should not happen: %s", str(ex))
-
-            raise Http404()
 
         def get(self, request):
             interface, device = None, None
@@ -101,59 +170,21 @@ def add_build(worker):
                 logger.warning('dcim/build called with IP associated with device with no platform: IP: %s, device: %s', buildip, device.name)
                 raise Http404('This device does not have a platform')
 
-            if device.__class__ is Device:
-                ip_filter = dict(interface__device__pk=device.pk)
-            elif device.__class__ is VirtualMachine:
-                ip_filter = dict(interface__virtual_machine__pk=device.pk)
-
-            ip_address_instances = list(
-                IPAddress.objects.filter(
-                    **ip_filter
-                ).prefetch_related('interface', 'interface__member_interfaces')
-            )
-
-
             networks = []
             member_interfaces = []
             for _i in device.interfaces.all():
                 if _i.mgmt_only:
                     continue
 
-                network = dict(
-                    interface=_i.name.split(".")[0],
-                    member_interfaces=[member.name for member in _i.member_interfaces.all()],
-                    vlan=_i.name.split('.')[-1] if '.' in _i.name else None,
-                    ipaddress=None,
-                    netmask=None,
-                    gateway=None,
-                    primary=False,
-                )
-
-                for ip in _i.ip_addresses.all():
-                    gateway = IPAddress.objects.filter(
-                        address__net_contained_or_equal=ip.address.cidr,
-                        address__net_mask_length=ip.address.prefixlen,
-                        tags__name__in=["Gateway"]
-                    ).first()
-
-                    network["ipaddress"] = ipaddress.IPv4Interface(ip.address).with_netmask.split("/")[0]
-                    network["netmask"] = ipaddress.IPv4Interface(ip.address).with_netmask.split('/')[1]
-                    network["gateway"] = str(gateway.address.ip) if gateway else None
-                    network["primary"] = network["primary"] or ip.address == device.primary_ip4.address
-
-                member_interfaces.extend(network["member_interfaces"])
-                networks.append(network)
+                for network in _networks_for_interface(_i):
+                    member_interfaces.extend(network["member_interfaces"])
+                    networks.append(network)
 
             networks = [n for n in networks if n["interface"] not in member_interfaces]
             networks.sort(key=lambda ip: ip['primary'], reverse=True)
 
             user = User.objects.filter(username="deployment_user").first()
-
-            otp = None
-            if IPA_ENABLED:
-                otp = self._create_ipa_host(device)
-
-            token = Token.objects.filter(user__username="deployment_user").first()
+            token = None
             if user:
                 token = Token.objects.create(user=user, expires=datetime.now(timezone.utc) + timedelta(minutes=30))
                 token.save()
@@ -164,7 +195,7 @@ def add_build(worker):
                     device=device,
                     networks=networks,
                     domain=device.name.split('.', 1)[-1],
-                    otp=otp,
+                    otp=_create_ipa_host(device),
                     token=token.key if token else None,
                     request=request,
                 )
